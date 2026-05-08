@@ -91,16 +91,15 @@
     // Handles HTTP communication with the backend server
     const api = {
         async get(url) {
-            try {
-                const res = await fetch(url);
-                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-                const contentType = res.headers.get("content-type");
-                return (contentType && contentType.includes("application/json")) ? res.json() : res.text();
-            } catch (error) {
-                console.error(`GET error from ${url}:`, error);
-                return null;
-            }
-        },
+           try {
+             const res = await fetch(url);
+             if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+             return res.json(); 
+           } catch (error) {
+              console.error(`GET error from ${url}:`, error);
+              return null;
+           }  
+         },
         async post(url, body) {
             try {
                 const res = await fetch(url, {
@@ -188,7 +187,7 @@
       if (peers) {
         state.users = Object.entries(peers).map(([key, timestamp]) => ({
             id: key,
-            name: `Peer ${key.split(':').pop()}`, 
+            name: key.split(':').pop(), 
             status: (Date.now()/1000 - timestamp < 30) ? 'online' : 'offline',
             avatarColor: getRandomColor(key)
         }));
@@ -197,7 +196,7 @@
 
       const messagesData = await api.get('/api/get-messages');
       if (messagesData) {
-         tate.messages = messagesData;
+         state.messages = messagesData;
          if (state.currentUserId) renderMessages();
       }
     }

@@ -132,11 +132,7 @@ async def submit_info(headers, body):
 
 @app.route('/get-list', methods=['GET'])
 async def get_list(headers, body):
-    """
-    Returns the list of all currently active peers.
-    """
-    # Optional: Filter out peers that haven't checked in for a long time
-    return json.dumps(active_peers).encode('utf-8')
+    return json.dumps(active_peers).encode('utf-8'), {"Content-Type": "application/json"}
 
 # Store chat history in memory for the demo
 chat_history = []
@@ -154,7 +150,4 @@ async def receive_message(headers, body):
 
 @app.route('/api/get-messages', methods=['GET'])
 async def get_messages(headers, body):
-    """
-    API for the frontend (chat.html) to fetch the conversation history.
-    """
-    return json.dumps(chat_history).encode('utf-8')
+    return json.dumps(chat_history).encode('utf-8'), {"Content-Type": "application/json"}
