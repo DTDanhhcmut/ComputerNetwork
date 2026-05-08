@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>P2P Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/chat.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h1 class="app-title">P2P Chat</h1>
+                <button id="connectBtn" class="connect-btn">
+                    <span class="btn-text">Go Online</span>
+                    <span class="status-dot"></span>
+                </button>
+            </div>
+            
+            <div class="user-list-label">Online Peers</div>
+            <ul class="user-list" id="userList">
+                <!-- Users will be populated by JS -->
+            </ul>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <main class="chat-area">
+            <div id="chatView" style="display: none; height: 100%; flex-direction: column;">
+                <header class="chat-header">
+                    <div class="user-avatar" id="headerAvatar"></div>
+                    <div class="chat-header-info">
+                        <h2 id="headerName">User Name</h2>
+                        <div class="chat-header-status" id="headerStatus">Online</div>
+                    </div>
+                </header>
+
+                <div class="messages-container" id="messagesContainer">
+                    <!-- Messages will appear here -->
+                </div>
+
+                <div class="input-area">
+                    <input type="text" id="messageInput" class="message-input" placeholder="Type a message...">
+                    <button id="sendBtn" class="send-btn">
+                        <svg viewBox="0 0 24 24">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+
+            <div id="emptyState" class="empty-state">
+                <div class="empty-state-icon">👋</div>
+                <h3>Welcome to P2P Chat</h3>
+                <p>Select a peer from the list to start a conversation.</p>
+            </div>
+        </main>
+    </div>
+
+    <script>
+    // --- STATE MANAGEMENT ---
+    // Manages the application's local data including peer list and messages
+    const state = {
+        users: [],
+        messages: {},
+        currentUserId: null,
+        currentUserIP: null, // Will store "IP:Port" of this peer
+        isConnected: false,
+    };
+
+    // --- DOM ELEMENTS ---
+    // Caching DOM references for performance
+    const dom = {
+        userList: document.getElementById('userList'),
+        chatView: document.getElementById('chatView'),
+        emptyState: document.getElementById('emptyState'),
+        headerName: document.getElementById('headerName'),
+        headerStatus: document.getElementById('headerStatus'),
+        headerAvatar: document.getElementById('headerAvatar'),
+        messagesContainer: document.getElementById('messagesContainer'),
+        messageInput: document.getElementById('messageInput'),
+        sendBtn: document.getElementById('sendBtn'),
+        connectBtn: document.getElementById('connectBtn'),
+    };
+
+    // --- API WRAPPER ---
+    // Handles HTTP communication with the backend server
+    const api = {
+        async get(url) {
+            try {
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                const contentType = res.headers.get("content-type");
+                return (contentType && contentType.includes("application/json")) ? res.json() : res.text();
+            } catch (error) {
+                console.error(`GET error from ${url}:`, error);
+                return null;
+            }
+        },
+        async post(url, body) {
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                const contentType = res.headers.get("content-type");
+                return (contentType && contentType.includes("application/json")) ? res.json() : res.text();
+            } catch (error) {
+                console.error(`POST error to ${url}:`, error);
+                return null;
+            }
+        }
+    };
+    
+    // --- UI RENDERING ---
+    // Dynamically populates the peer list in the sidebar
+    function renderUserList() {
+        dom.userList.innerHTML = '';
+        state.users.forEach(user => {
+            // Don't show our own ID in the list
+            if (user.id === state.currentUserIP) return;
+
+            const li = document.createElement('li');
+            li.className = `user-item ${user.status} ${state.currentUserId === user.id ? 'active' : ''}`;
+            li.onclick = () => selectUser(user.id);
+            
+            const initials = user.name.split(':').pop().substring(0, 2); // Show port as initials
+
+            li.innerHTML = `
+                <div class="user-avatar" style="background: ${user.avatarColor}">
+                    ${initials}
+                    <div class="status-indicator"></div>
+                </div>
+                <div class="user-info">
+                    <div class="user-name">Peer ${user.name}</div>
+                    <div class="user-status-text">${user.status}</div>
+                </div>
+            `;
+            dom.userList.appendChild(li);
+        });
+    }
+
+    // Displays messages for the selected peer
+    function renderMessages() {
+        dom.messagesContainer.innerHTML = '';
+        if (!state.currentUserId || !state.messages) return;
+
+        // Filter messages belonging to the current conversation
+        const history = Array.isArray(state.messages) ? state.messages : [];
+        const conversation = history.filter(m => 
+            (m.sender === state.currentUserIP && m.receiver === state.currentUserId) ||
+            (m.sender === state.currentUserId && m.receiver === state.currentUserIP)
+        );
+
+        conversation.forEach(msg => {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${msg.sender === state.currentUserIP ? 'sent' : 'received'}`;
+            msgDiv.innerHTML = `
+                ${escapeHTML(msg.text)}
+                <div class="message-time">${msg.time || ''}</div>
+            `;
+            dom.messagesContainer.appendChild(msgDiv);
+        });
+        scrollToBottom();
+    }
+
+    // --- CORE LOGIC & EVENT HANDLERS ---
+    
+    // Initialize application settings on load
+    async function initialize() {
+        // Automatically determine identity based on current browser URL
+        state.currentUserIP = `${window.location.hostname}:${window.location.port}`;
+        setupEventListeners();
+        // Start background polling to keep data synchronized
+        setInterval(pollData, 2000); 
+    }
+
+    // Periodically fetches active peers and new messages from the server
+    async function pollData() {
+      if (!state.isConnected) return;
+      const peers = await api.get('/get-list'); 
+      if (peers) {
+        state.users = Object.entries(peers).map(([key, timestamp]) => ({
+            id: key,
+            name: `Peer ${key.split(':').pop()}`, 
+            status: (Date.now()/1000 - timestamp < 30) ? 'online' : 'offline',
+            avatarColor: getRandomColor(key)
+        }));
+        renderUserList();
+       }
+
+      const messagesData = await api.get('/api/get-messages');
+      if (messagesData) {
+         tate.messages = messagesData;
+         if (state.currentUserId) renderMessages();
+      }
+    }
+
+    // Handle peer selection from the sidebar
+    function selectUser(id) {
+        if (!state.isConnected) return alert('Please go online first!');
+        state.currentUserId = id;
+        const user = state.users.find(u => u.id === id);
+        if (user) {
+            dom.headerName.textContent = `Peer ${user.name}`;
+            dom.headerStatus.textContent = user.status;
+            dom.chatView.style.display = 'flex';
+            dom.emptyState.style.display = 'none';
+            renderMessages();
+            renderUserList();
+            dom.messageInput.focus();
+        }
+    }
+
+    // Send a message to the backend for P2P delivery
+    async function handleSendMessage() {
+        const text = dom.messageInput.value.trim();
+        if (!text || !state.currentUserId) return;
+
+        const newMsg = {
+            id: Date.now(),
+            text: text,
+            sender: state.currentUserIP,
+            receiver: state.currentUserId,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        };
+
+        // Dispatch message to the /receive-message route on backend
+        await api.post("/receive-message", newMsg);
+        dom.messageInput.value = '';
+    }
+
+    // Manage online/offline status and register with Tracker
+    async function toggleConnection() {
+      state.isConnected = !state.isConnected;
+      const btnText = dom.connectBtn.querySelector('.btn-text');
+
+      if (state.isConnected) {
+         dom.connectBtn.classList.add('connected');
+         btnText.textContent = 'Online';
+        
+        await api.post('/submit-info', { 
+            ip: window.location.hostname, 
+            port: window.location.port 
+        });
+      } else {
+        dom.connectBtn.classList.remove('connected');
+        btnText.textContent = 'Go Online';
+      }
+    }
+
+    function setupEventListeners() {
+        dom.connectBtn.addEventListener('click', toggleConnection);
+        dom.sendBtn.addEventListener('click', handleSendMessage);
+        dom.messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') handleSendMessage();
+        });
+    }
+
+    // --- UTILITIES ---
+    function scrollToBottom() { dom.messagesContainer.scrollTop = dom.messagesContainer.scrollHeight; }
+    
+    function escapeHTML(str) {
+        return str.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    const colorCache = {};
+    const colors = ['#FF6B6B', '#48DBFB', '#1DD1A1', '#F368E0', '#FF9F43', '#54a0ff', '#5f27cd'];
+    function getRandomColor(seed) {
+        if (colorCache[seed]) return colorCache[seed];
+        let hash = 0;
+        for (let i = 0; i < seed.length; i++) hash = seed.charCodeAt(i) + ((hash << 5) - hash);
+        return colorCache[seed] = colors[Math.abs(hash) % colors.length];
+    }
+
+    document.addEventListener('DOMContentLoaded', initialize);
+</script>
+</body>
+</html>

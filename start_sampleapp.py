@@ -32,6 +32,7 @@ from apps import create_sampleapp
 
 PORT = 2026  # Default port
 
+
 if __name__ == "__main__":
     # Parse command-line arguments to configure server IP and port
     parser = argparse.ArgumentParser(prog='Backend', description='', epilog='Beckend daemon')
@@ -44,3 +45,4 @@ if __name__ == "__main__":
 
     # Prepare and launch the RESTful application
     create_sampleapp(ip, port)
+

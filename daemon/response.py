@@ -270,15 +270,13 @@ class Response():
 
         # Status line
         status_line = f"HTTP/1.1 {self.status_code} {self.reason}\r\n"
-
+        header_lines = ""
         # Header lines (use the complete 'headers' dictionary)
         if self.cookies:
-            headers["Set-Cookie"] = [
-                f"{k}={v}"
-                for k, v in self.cookies.items()
-            ]
+            for k, v in self.cookies.items():
+                header_lines += f"Set-Cookie: {k}={v}; Path=/; HttpOnly\r\n"
 
-        header_lines = ""
+        
         for k, v in headers.items():
             if isinstance(v, list):
                 for item in v:
@@ -312,17 +310,39 @@ class Response():
             ).encode('utf-8')
 
 
-    def build_response(self, request, content = None):
+    def build_response(self, request, content=None):
         """
         Builds a full HTTP response including headers and content based on the request.
 
         :params request (class:`Request <Request>`): incoming request object.
-
         :rtype bytes: complete HTTP response using prepared headers and content.
         """
 
         path = request.path
+        
+        # New logic to handle extra headers (like Set-Cookie) from WebApp
+        extra_headers = {}
         if content is not None:
+            # Check if the WebApp returned a tuple (content, extra_headers)
+            # Case 1: content is a tuple (body, extra_headers) OR (body, status_code)
+            if isinstance(content, tuple):
+                if len(content) > 1:
+                    # If the second element is a dict, it's extra headers
+                    if isinstance(content[1], dict):
+                        extra_headers = content[1]
+                    # If the second element is an int, it's a custom status code
+                    elif isinstance(content[1], int):
+                        self.status_code = content[1]
+                        self.reason = "Forbidden" if self.status_code == 403 else "Error"
+                content = content[0]
+
+            # Case 2: content is just an integer (a status code)
+            elif isinstance(content, int):
+                self.status_code = content
+                self.reason = "Forbidden" if content == 403 else "Error"
+                content = b"Error occurred" # Default error message
+
+            # Case 3: Standard content processing
             if isinstance(content, dict):
                 import json
                 self._content = json.dumps(content).encode('utf-8')
@@ -330,18 +350,29 @@ class Response():
             else:
                 self._content = content if isinstance(content, bytes) else str(content).encode('utf-8')
             
-            self.status_code = 200
-            self.reason = "OK"
+            # Extract cookies if any
+            if isinstance(extra_headers, dict) and "Set-Cookie" in extra_headers:
+                cookie_str = extra_headers["Set-Cookie"]
+                kv_pair = cookie_str.split(';')[0]
+                if '=' in kv_pair:
+                    k, v = kv_pair.split('=', 1)
+                    self.cookies[k] = v
+
+            # Finalize response if status_code wasn't set by tuple/int logic above
+            if self.status_code is None or self.status_code == 0:
+                self.status_code = 200
+                self.reason = "OK"
 
             self._header = self.build_response_header(request)
             return self._header + self._content
 
+        # Handle static file serving logic
         mime_type = self.get_mime_type(path)
         print("[Response] {} path {} mime_type {}".format(request.method, request.path, mime_type))
 
         base_dir = ""
 
-        #If HTML, parse and serve embedded objects
+        # Routing based on MIME types to determine base directory
         if path.endswith('.html') or mime_type == 'text/html':
             base_dir = self.prepare_content_type(mime_type = 'text/html')
         elif mime_type == 'text/css':
@@ -360,17 +391,17 @@ class Response():
             base_dir = self.prepare_content_type(mime_type = 'video/mp4')
         elif mime_type == 'video/mpeg':
             base_dir = self.prepare_content_type(mime_type = 'video/mpeg')
-        #
-        # TODO: add support objects
-        #
+        # TODO: add support for more objects if needed
         elif mime_type == 'application/octet-stream':
             base_dir = self.prepare_content_type(mime_type = 'application/json')
             path = "return.json"
         else:
             return self.build_notfound()
         
+        # Load file content and length from the resolved directory
         c_len, self._content = self.build_content(path, base_dir)
 
+        # Validate if content was successfully loaded
         if c_len > 0 or path == "return.json":
              if self.status_code is None:
                 self.status_code = 200
@@ -378,6 +409,7 @@ class Response():
         else:
              return self.build_notfound()
 
+        # Finalize response with headers
         self._header = self.build_response_header(request)
         return self._header + self._content
     
