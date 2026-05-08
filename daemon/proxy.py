@@ -1,9 +1,9 @@
 #
-# Copyright (C) 2026 pdnguyen of HCMC University of Technology VNU-HCM.
+# Copyright (C) 2025 pdnguyen of HCMC University of Technology VNU-HCM.
 # All rights reserved.
 # This file is part of the CO3093/CO3094 course.
 #
-# AsynapRous release
+# WeApRous release
 #
 # The authors hereby grant to Licensee personal permission to use
 # and modify the Licensed Source Code for the sole purpose of studying
@@ -36,11 +36,14 @@ from .dictionary import CaseInsensitiveDict
 #: A dictionary mapping hostnames to backend IP and port tuples.
 #: Used to determine routing targets for incoming requests.
 PROXY_PASS = {
-    "192.168.56.103:8080": ('192.168.56.103', 9000),
-    "app1.local": ('192.168.56.103', 9001),
-    "app2.local": ('192.168.56.103', 9002),
+    "192.168.1.243:8080": ('192.168.1.82', 9000),
+    "app1.local": ('192.168.1.82', 9001),
+    "app2.local": ('192.168.1.82', 9002),
 }
 
+
+_roundrobin_index = {}
+_roundrobin_lock = threading.Lock()
 
 def forward_request(host, port, request):
     """
@@ -89,29 +92,37 @@ def resolve_routing_policy(hostname, routes):
     """
 
     print(hostname)
-    proxy_map, policy = routes.get(hostname,('127.0.0.1:9000','round-robin'))
-    print(proxy_map)
-    print(policy)
+    #proxy_map, policy = routes.get(hostname,('127.0.0.1:9000','round-robin'))
+    proxy_map, policy = routes.get(hostname,('192.168.1.82:9000','round-robin'))
+    #proxy_map, policy = routes.get(hostname,PROXY_PASS)
+    print (proxy_map)
+    print (policy)
 
     proxy_host = ''
     proxy_port = '9000'
     if isinstance(proxy_map, list):
         if len(proxy_map) == 0:
             print("[Proxy] Emtpy resolved routing of hostname {}".format(hostname))
-            print("Empty proxy_map result")
+            print ("Empty proxy_map result")
             # TODO: implement the error handling for non mapped host
             #       the policy is design by team, but it can be 
             #       basic default host in your self-defined system
             # Use a dummy host to raise an invalid connection
+            #proxy_host = '127.0.0.1'
             proxy_host = '127.0.0.1'
             proxy_port = '9000'
-        elif len(value) == 1:
+        elif len(proxy_map) == 1:
+            # if only a single direction, use it directly
             proxy_host, proxy_port = proxy_map[0].split(":", 2)
-        #elif: # apply the policy handling 
-        #   proxy_map
-        #   policy
+        elif len(proxy_map) > 1 and policy == "round": # apply the policy handling 
+            with _roundrobin_lock:
+                idx = _roundrobin_index.get(hostname, 0)
+                backend = proxy_map[idx % len(proxy_map)]
+                _roundrobin_index[hostname] = idx + 1
+            proxy_host, proxy_port = backend.split(":", 1)
         else:
             # Out-of-handle mapped host
+            #proxy_host = '127.0.0.1'
             proxy_host = '127.0.0.1'
             proxy_port = '9000'
     else:
@@ -199,6 +210,12 @@ def run_proxy(ip, port, routes):
             #        using multi-thread programming with the
             #        provided handle_client routine
             #
+            client_thread = threading.Thread(
+                target=handle_client,
+                args=(ip, port, conn, addr, routes)
+            )
+            client_thread.daemon = True  # Thread will die when main program exits
+            client_thread.start()
     except socket.error as e:
       print("Socket error: {}".format(e))
 

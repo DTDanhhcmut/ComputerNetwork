@@ -115,7 +115,11 @@ class HttpAdapter:
             #
             # TODO: handle for App hook here
             #
-            response = ""
+            content = req.hook(req.headers, req.body)
+            response = self.response.build_response(req, content)
+        else:
+            response = self.response.build_notfound()
+            
 
         #print("[HttpAdapter] Response content {}".format(response))
         conn.sendall(response)
@@ -138,29 +142,46 @@ class HttpAdapter:
         # Response handler
         resp = self.response
 
-        print("[HttpAdapter] Invoke handle_client_coroutine connection {})".format(addr))
         addr = writer.get_extra_info("peername")
+        print("[HttpAdapter] Invoke handle_client_coroutine connection {})".format(addr))
+        
 
         # TODO Handle the request asynchronously
-        msg = await reader.read(1024)
+        msg = await reader.read(4096)
+        if not msg:
+            writer.close()
+            await writer.wait_closed()
+            return
 
 
-        req.prepare(msg.decode("utf-8"), routes={})
+        req = self.request
+        req.prepare(msg.decode("utf-8"), routes=self.routes)
 
         # Handle request hook
+        content = None
         if req.hook:
             #
             # TODO: handle for App hook here
             #
-            response = ""
+            if inspect.iscoroutinefunction(req.hook):
+                content = await req.hook(req.headers, req.body)
+            else:
+                content = req.hook(req.headers, req.body)
 
         # Build response
         #print("[HttpAdapter] Start **ASYNC** build_response with type {}".format(type(req)))
-        response = resp.build_response(req)
+        response = self.response.build_response(req, content)
 
         # Send all the response asynchronously
-        writer.write(response)
-        await writer.drain()
+        try:
+            writer.write(response)
+            await writer.drain()
+        except Exception as e:
+            print("[HttpAdapter] Error sending response: {}".format(e))
+        finally:
+            # Safely close the stream writer
+            writer.close()
+            await writer.wait_closed()
 
     @property
     def extract_cookies(self, req, resp):

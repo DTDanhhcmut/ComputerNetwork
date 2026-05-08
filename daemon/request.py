@@ -1,9 +1,9 @@
 #
-# Copyright (C) 2026 pdnguyen of HCMC University of Technology VNU-HCM.
+# Copyright (C) 2025 pdnguyen of HCMC University of Technology VNU-HCM.
 # All rights reserved.
 # This file is part of the CO3093/CO3094 course.
 #
-# AsynapRous release
+# WeApRous release
 #
 # The authors hereby grant to Licensee personal permission to use
 # and modify the Licensed Source Code for the sole purpose of studying
@@ -40,9 +40,7 @@ class Request():
         "method",
         "url",
         "headers",
-        "body",
-        "_raw_headers",
-        "_raw_body",
+        "path", #:ban dau la body, sua lai thanh path
         "reason",
         "cookies",
         "body",
@@ -63,10 +61,6 @@ class Request():
         self.cookies = None
         #: request body to send to the server.
         self.body = None
-        # The raw header
-        self._raw_headers = None
-        #: The raw body
-        self._raw_body = None
         #: Routes
         self.routes = {}
         #: Hook point for routed mapped-path
@@ -83,68 +77,115 @@ class Request():
         except Exception:
             return None, None
 
-        return method, path, version
+        return method, path, version # Example: "GET / HTTP/1.1" become return(GET, /index.html, HTTP/1.1)
              
     def prepare_headers(self, request):
         """Prepares the given HTTP headers."""
-        lines = request.split('\r\n')
+        # FIX 1: Use splitlines() to handle \r\n AND \n automatically
+        lines = request.splitlines()
         headers = {}
-        for line in lines[1:]:
-            if ': ' in line:
-                key, val = line.split(': ', 1)
-                headers[key.lower()] = val
+        
+        # Start from 1 to skip the "GET / HTTP/1.1" line
+        if len(lines) > 1:
+            for line in lines[1:]:
+                # FIX 2: Check for ':' generally, not ': '
+                if ':' in line:
+                    key, val = line.split(':', 1)
+                    # FIX 3: Strip spaces manually. 
+                    # This turns "Cookie: auth=true" OR "Cookie:auth=true" into the same result.
+                    headers[key.lower().strip()] = val.strip()
+                    
         return headers
-
-    def fetch_headers_body(self, request):
-        """Prepares the given HTTP headers."""
-        # Split request into header section and body section
-        parts = request.split("\r\n\r\n", 1)  # split once at blank line
-
-        _headers = parts[0]
-        _body = parts[1] if len(parts) > 1 else ""
-        return _headers, _body
 
     def prepare(self, request, routes=None):
         """Prepares the entire request with the given parameters."""
 
         # Prepare the request line from the request header
-        print("[Request] prepare request missg {}".format(request))
-        self.method, self.path, self.version = self.extract_request_line(request)
+        self.method, self.path, self.version = self.extract_request_line(request) # get method, path and version from first line: GET /test1/ HTTP/1.1
         print("[Request] {} path {} version {}".format(self.method, self.path, self.version))
-
+        #print("debug prepare function")
         #
-        # @bksysnet Preapring the webapp hook with AsynapRous instance
+        # @bksysnet Preapring the webapp hook with WeApRous instance
         # The default behaviour with HTTP server is empty routed
         #
         # TODO manage the webapp hook in this mounting point
         #
-        
+
         if not routes == {}:
             self.routes = routes
-            print("[Request] Routing METHOD {} path {}".format(self.method, self.path))
-            self.hook = routes.get((self.method, self.path))
-            print("[Request] Hook has request {}".format(request))
+            self.hook = routes.get((self.method, self.path)) # this will give the destination function ("GET", "/index.html") → home_handler => req.hook = home_handler
             #
             # self.hook manipulation goes here
             # ...
             #
 
-        self._raw_heaers = ""
-        self._raw_body =  ""
-        cookies = self.headers.get('cookie', '')
-            #
-            #  TODO: implement the cookie function here
-            #        by parsing the header            #
+        self.headers = self.prepare_headers(request)
+        
+        # Get the cookie string (keys are lowercased by our new prepare_headers)
+        cookies = self.headers.get('cookie')
+        
+        self.cookies = {} # Reset cookies
+        
+        if cookies:
+            for pair in cookies.split(';'):
+                if '=' in pair:
+                    key, value = pair.split('=', 1)
+                    # FIX 4: Strip keys/values just to be safe 
+                    # (Clean up " auth=true" -> "auth")
+                    self.cookies[key.strip()] = value.strip()
+                    
+            # This line in your original code is redundant/circular but harmless:
+            self.prepare_cookies(cookies)
+        
+
+        
+        body = None 
+        
+        parts = request.split("\r\n\r\n", 1) 
+        print("[Request] requested: {}".format(request))
+        
+        if len(parts) > 1:
+            body = parts[1]
+            print("[Request] parts: {}".format(parts[0]))
+
+        self.prepare_body(body, None, None)
 
         return
 
     def prepare_body(self, data, files, json=None):
-        self.prepare_content_length(self.body)
-        self.body = body
+        
+        """
+        Prepares the request body and sets the appropriate Content-Type and Content-Length headers.
+        Handles three cases: JSON, form data, and files (multipart).
+        """
+        if json is not None:
+            # Case 1: JSON body (assume already a string or use str())
+            self.body = str(json)
+            self.headers["Content-Type"] = "application/json"
+        elif files is not None:
+            # Case 3: Files (multipart/form-data) - placeholder
+            boundary = "----WeApRousBoundary"
+            self.headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+            self.body = data if data else ""
+        elif data is not None:
+            # Case 2: Form data or raw
+            if isinstance(data, dict):
+                # Manual urlencoding: key1=val1&key2=val2
+                self.body = "&".join(f"{k}={v}" for k, v in data.items())
+                self.headers["Content-Type"] = "application/x-www-form-urlencoded"
+            elif isinstance(data, bytes):
+                self.body = data
+            else:
+                self.body = str(data)
+                self.headers.setdefault("Content-Type", "text/plain")
+        else:
+            # No body provided, keep as is (could be set from earlier parsing)
+            pass
         #
         # TODO prepare the request authentication
         #
 	# self.auth = ...
+        self.prepare_content_length(self.body)
         return
 
 
@@ -154,6 +195,11 @@ class Request():
         # TODO prepare the request authentication
         #
 	# self.auth = ...
+        if body is not None:
+            if isinstance(body, str):
+                self.headers["Content-Length"] = str(len(body.encode('utf-8')))
+            else:
+                self.headers["Content-Length"] = str(len(body))
         return
 
 
@@ -161,7 +207,10 @@ class Request():
         #
         # TODO prepare the request authentication
         #
-	# self.auth = ...
+        self.auth = auth
+        if auth:
+            self.cookies["auth"] = "true"
+            self.prepare_cookies("auth=true")
         return
 
     def prepare_cookies(self, cookies):

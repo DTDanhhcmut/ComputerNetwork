@@ -1,9 +1,9 @@
 #
-# Copyright (C) 2026 pdnguyen of HCMC University of Technology VNU-HCM.
+# Copyright (C) 2025 pdnguyen of HCMC University of Technology VNU-HCM.
 # All rights reserved.
 # This file is part of the CO3093/CO3094 course.
 #
-# AsynApRous release
+# WeApRous release
 #
 # The authors hereby grant to Licensee personal permission to use
 # and modify the Licensed Source Code for the sole purpose of studying
@@ -149,21 +149,18 @@ class Response():
         
         base_dir = ""
 
-        # Validate header attr existence
-        if not hasattr(self, "headers") or self.headers is None:
-            self.headers = {}
-
         # Processing mime_type based on main_type and sub_type
         main_type, sub_type = mime_type.split('/', 1)
-        print("[Response] Processing main_type={} sub_type={}".format(main_type,sub_type))
+        print("[Response] processing MIME main_type={} sub_type={}".format(main_type,sub_type))
         if main_type == 'text':
             self.headers['Content-Type']='text/{}'.format(sub_type)
-            if sub_type == 'plain' or sub_type == 'css':
+            if sub_type == 'plain' or sub_type == 'css' or sub_type == 'csv' or sub_type == 'xml':
                 base_dir = BASE_DIR+"static/"
             elif sub_type == 'html':
                 base_dir = BASE_DIR+"www/"
             else:
-                handle_text_other(sub_type)
+                base_dir = BASE_DIR+"static/"
+                #handle_text_other(sub_type) dummy from teacher?
         elif main_type == 'image':
             base_dir = BASE_DIR+"static/"
             self.headers['Content-Type']='image/{}'.format(sub_type)
@@ -182,6 +179,13 @@ class Response():
         #        video/mpeg
         #        ...
         #
+            if sub_type == 'xml' or sub_type == 'zip':
+                base_dir = BASE_DIR+"application/"
+        elif main_type == 'video':
+            base_dir = BASE_DIR+"static/"
+            self.headers['Content-Type']='video/{}'.format(sub_type)
+            if sub_type == 'mp4' or sub_type == 'mpeg':
+                base_dir = BASE_DIR+"video/"
         else:
             raise ValueError("Invalid MEME type: main_type={} sub_type={}".format(main_type,sub_type))
 
@@ -197,22 +201,28 @@ class Response():
 
         :rtype tuple: (int, bytes) representing content length and content data.
         """
-
+    
         filepath = os.path.join(base_dir, path.lstrip('/'))
-
-        print("[Response] Serving the object at location {}".format(filepath))
+        print("[Response] serving the object at location {}".format(filepath))
             #
             #  TODO: implement the step of fetch the object file
             #        store in the return value of content
             #
         try:
             with open(filepath, "rb") as f:
-               content = f.read()
+                content = f.read()
+            if path == "return.json":
+                # Clear the return.json
+                with open(filepath, "w") as f:
+                    f.write("")
+            return len(content), content
+        except FileNotFoundError:
+            print("[Response] file not found {}".format(filepath))
+            return 0, b""
         except Exception as e:
-            print("[Response] build_content exception: {}".format(e))
-            return -1, b""
-        return len(content), content
-
+            print("[Response] cant read the file {}".format(filepath))
+            return 0, b""
+        
 
     def build_response_header(self, request):
         """
@@ -232,13 +242,15 @@ class Response():
                 "Accept-Language": "{}".format(reqhdr.get("Accept-Language", "en-US,en;q=0.9")),
                 "Authorization": "{}".format(reqhdr.get("Authorization", "Basic <credentials>")),
                 "Cache-Control": "no-cache",
-                "Content-Type": "{}".format(self.headers['Content-Type']),
-                "Content-Length": "{}".format(len(self._content)),
-        #       "Cookie": "{}".format(reqhdr.get("Cookie", "sessionid=xyz789")), #dummy cooki
+                "Content-Type": "{}".format(self.headers.get('Content-Type', 'text/html')),
+                "Content-Length": "{}".format(len(self._content) if self._content else 0),
+#                "Cookie": "{}".format(reqhdr.get("Cookie", "sessionid=xyz789")), #dummy cooki
         #
         # TODO prepare the request authentication
         #
-        #       self.auth = ...
+	# self.auth = ...
+                
+                    
                 "Date": "{}".format(datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT")),
                 "Max-Forward": "10",
                 "Pragma": "no-cache",
@@ -252,13 +264,33 @@ class Response():
             #  TODO: implement the header building to create formated
             #        header from the provied headers
             #
-            #
-            # TODO prepare the request authentication
-            #
-            # self.auth = ...
+        #
+        # TODO prepare the request authentication
+        #
 
+        # Status line
+        status_line = f"HTTP/1.1 {self.status_code} {self.reason}\r\n"
 
-        return str(fmt_header).encode('utf-8')
+        # Header lines (use the complete 'headers' dictionary)
+        if self.cookies:
+            headers["Set-Cookie"] = [
+                f"{k}={v}"
+                for k, v in self.cookies.items()
+            ]
+
+        header_lines = ""
+        for k, v in headers.items():
+            if isinstance(v, list):
+                for item in v:
+                    header_lines += f"{k}: {item}\r\n"
+            else:
+                header_lines += f"{k}: {v}\r\n"
+
+        # Final header string
+        fmt_header = status_line + header_lines + "\r\n"
+        print(f"[Response.Header] Sending Header:\n{fmt_header}") # Keep this print for verification
+
+        return fmt_header.encode("utf-8")
 
 
     def build_notfound(self):
@@ -280,7 +312,7 @@ class Response():
             ).encode('utf-8')
 
 
-    def build_response(self, request, envelop_content=None):
+    def build_response(self, request, content = None):
         """
         Builds a full HTTP response including headers and content based on the request.
 
@@ -288,9 +320,21 @@ class Response():
 
         :rtype bytes: complete HTTP response using prepared headers and content.
         """
-        print("[Response] Start build response with req {}".format(request))
 
         path = request.path
+        if content is not None:
+            if isinstance(content, dict):
+                import json
+                self._content = json.dumps(content).encode('utf-8')
+                self.headers['Content-Type'] = 'application/json'
+            else:
+                self._content = content if isinstance(content, bytes) else str(content).encode('utf-8')
+            
+            self.status_code = 200
+            self.reason = "OK"
+
+            self._header = self.build_response_header(request)
+            return self._header + self._content
 
         mime_type = self.get_mime_type(path)
         print("[Response] {} path {} mime_type {}".format(request.method, request.path, mime_type))
@@ -302,14 +346,82 @@ class Response():
             base_dir = self.prepare_content_type(mime_type = 'text/html')
         elif mime_type == 'text/css':
             base_dir = self.prepare_content_type(mime_type = 'text/css')
-        elif mime_type == 'application/json' or mime_type == 'application/octet-stream':
-            base_dir = self.prepare_content_type(mime_type = 'application/json')
-            envelop_content = ""
-
+        elif mime_type == 'text/csv':
+            base_dir = self.prepare_content_type(mime_type = 'text/csv')
+        elif mime_type == 'text/xml':
+            base_dir = self.prepare_content_type(mime_type = 'text/xml')
+        elif mime_type.startswith('image/'):
+            base_dir = self.prepare_content_type(mime_type=mime_type)
+        elif mime_type == 'application/xml':
+            base_dir = self.prepare_content_type(mime_type = 'application/xml')
+        elif mime_type == 'application/zip':
+            base_dir = self.prepare_content_type(mime_type = 'application/zip')
+        elif mime_type == 'video/mp4':
+            base_dir = self.prepare_content_type(mime_type = 'video/mp4')
+        elif mime_type == 'video/mpeg':
+            base_dir = self.prepare_content_type(mime_type = 'video/mpeg')
         #
         # TODO: add support objects
         #
+        elif mime_type == 'application/octet-stream':
+            base_dir = self.prepare_content_type(mime_type = 'application/json')
+            path = "return.json"
         else:
             return self.build_notfound()
+        
+        c_len, self._content = self.build_content(path, base_dir)
 
+        if c_len > 0 or path == "return.json":
+             if self.status_code is None:
+                self.status_code = 200
+                self.reason = "OK"
+        else:
+             return self.build_notfound()
+
+        self._header = self.build_response_header(request)
         return self._header + self._content
+    
+    # helper function
+    def build_unauthorized(self):
+        body = "401 Unauthorized"
+        return (
+            "HTTP/1.1 401 Unauthorized\r\n"
+            "Accept-Ranges: bytes\r\n"
+            "Content-Type: text/html\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Cache-Control: no-store\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            f"{body}"
+            ).encode("utf-8")
+
+    def build_api_response(self, status_code, body_data):
+        """
+        Builds a simplified HTTP response for API calls.
+        """
+        self.status_code = status_code
+        
+        # Determine reason phrase from status code
+        reason_phrases = {200: "OK", 400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}
+        self.reason = reason_phrases.get(status_code, "OK")
+
+        # Ensure body is a string
+        if not isinstance(body_data, str):
+            body_data = str(body_data)
+            
+        self._content = body_data.encode('utf-8')
+
+        # Basic headers for an API response
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Content-Length": str(len(self._content)),
+            "Date": datetime.datetime.utcnow().strftime("%a, %d %b %Y %H:%M:%S GMT"),
+            "Connection": "close",
+            "Access-Control-Allow-Origin": "*" # Added for flexibility
+        }
+
+        status_line = f"HTTP/1.1 {self.status_code} {self.reason}\r\n"
+        header_lines = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+        
+        return (status_line + header_lines + "\r\n").encode('utf-8') + self._content
+

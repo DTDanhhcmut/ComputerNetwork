@@ -19,6 +19,11 @@ app.sampleapp
 
 """
 
+import asyncio
+import time
+
+
+
 import sys
 import os
 import importlib.util
@@ -27,6 +32,11 @@ import json
 from   daemon import AsynapRous
 
 app = AsynapRous()
+
+@app.route('/long-task', methods=['GET'])
+async def long_task(headers, body):
+    await asyncio.sleep(5) # Giả lập tác vụ tốn 5 giây
+    return b"Task finished!"
 
 @app.route('/login', methods=['POST'])
 def login(headers="guest", body="anonymous"):
@@ -63,7 +73,7 @@ def echo(headers="guest", body="anonymous"):
         return (json_str.encode("utf-8"))
 
 
-@app.route('/hello', methods=['PUT'])
+@app.route('/hello', methods=['GET', 'PUT'])
 async def hello(headers, body):
     """
     Handle greeting via PUT request.
